@@ -1,108 +1,103 @@
 'use client'
-
 import { Input, Textarea } from '@/components/customs/form'
-import { useClients, useCreateInvoice, useNextInvoiceNumber, useProjects } from '@/lib/queries'
+import {
+  useClients,
+  useDeleteInvoice,
+  useInvoice,
+  useProjects,
+  useUpdateInvoice
+} from '@/lib/queries'
+import { type InvoiceDto } from '@/lib/types'
 import { useRouter } from 'next/navigation'
 import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 
-function today() {
-  return new Date().toISOString().slice(0, 10)
+type ItemForm = {
+  id?: string
+  description: string
+  quantity: string
+  unitPrice: string
+  sortOrder?: number
 }
 
-export default function NewInvoiceModal({
-  open,
-  onClose,
-  initialProjectId,
-  initialClientId
-}: {
-  open: boolean
-  onClose: () => void
-  initialProjectId?: string
-  initialClientId?: string
-}) {
+export default function InvoiceEditor({ invoiceId }: { invoiceId: string }) {
   const router = useRouter()
-  const create = useCreateInvoice()
-  const [autoNumber, setAutoNumber] = useState(true)
+  const { data, isLoading, error, refetch } = useInvoice(invoiceId)
+  const update = useUpdateInvoice(invoiceId)
+  const del = useDeleteInvoice(invoiceId)
+
+  // selects data
+  const { data: clients } = useClients({ page: 1, pageSize: 200 })
+  const { data: projects } = useProjects?.({ page: 1, pageSize: 200 } as any) || { data: undefined }
+
+  // form state
   const [number, setNumber] = useState('')
   const [currency, setCurrency] = useState('USD')
-  const [issueDate, setIssueDate] = useState(today())
+  const [issueDate, setIssueDate] = useState('')
   const [dueDate, setDueDate] = useState('')
+  const [status, setStatus] = useState<InvoiceDto['status']>('DRAFT')
   const [clientId, setClientId] = useState<string>('')
   const [projectId, setProjectId] = useState<string>('')
 
-  const [taxRatePct, setTaxRatePct] = useState<number>(0)
   const [notes, setNotes] = useState('')
   const [terms, setTerms] = useState('')
 
-  type ItemForm = { description: string; quantity: string; unitPrice: string }
-  const [items, setItems] = useState<ItemForm[]>([
-    { description: '', quantity: '1', unitPrice: '0' }
-  ])
+  const [items, setItems] = useState<ItemForm[]>([])
 
-  // reset quand on ouvre
+  // hydrate on load
   useEffect(() => {
-    if (open) {
-      setAutoNumber(true)
-      setNumber('')
-      setCurrency('USD')
-      setIssueDate(today())
-      setDueDate('')
-      setClientId(initialClientId || '')
-      setProjectId(initialProjectId || '')
-      setTaxRatePct(0)
-      setNotes('')
-      setTerms('')
-      setItems([{ description: '', quantity: '1', unitPrice: '0' }])
-    }
-  }, [open, initialProjectId, initialClientId])
-
-  // modal UX
-  useEffect(() => {
-    if (!open) return
-    function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') onClose()
-    }
-    document.addEventListener('keydown', onKey)
-    const prev = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    return () => {
-      document.removeEventListener('keydown', onKey)
-      document.body.style.overflow = prev
-    }
-  }, [open, onClose])
-
-  const { data: clients } = useClients({ page: 1, pageSize: 100 })
-  const { data: projects } = useProjects?.({ page: 1, pageSize: 100 } as any) || { data: undefined }
-  const nextNum = useNextInvoiceNumber()
+    if (!data) return
+    setNumber(data.number || '')
+    setCurrency(data.currency || 'USD')
+    setIssueDate(data.issueDate || '')
+    setDueDate(data.dueDate || '')
+    setStatus(data.status)
+    setClientId(data.clientId || '')
+    setProjectId(data.projectId || '')
+    setNotes(data.notes || '')
+    setTerms(data.terms || '')
+    setItems(
+      (data.items || [])
+        .sort((a, b) => a.sortOrder - b.sortOrder)
+        .map((it) => ({
+          id: it.id,
+          description: it.description,
+          quantity: String(Number(it.quantity)),
+          unitPrice: String(Number(it.unitPrice)),
+          sortOrder: it.sortOrder
+        }))
+    )
+  }, [data])
 
   const parsedItems = useMemo(() => {
     return items.map((it) => ({
+      id: it.id,
       description: it.description,
       quantity: Math.max(0, parseFloat(it.quantity || '0')),
-      unitPrice: Math.max(0, parseFloat(it.unitPrice || '0'))
+      unitPrice: Math.max(0, parseFloat(it.unitPrice || '0')),
+      sortOrder: it.sortOrder
     }))
   }, [items])
 
   const subtotal = parsedItems.reduce((acc, it) => acc + it.quantity * it.unitPrice, 0)
-  const tax = subtotal * (taxRatePct / 100)
-  const total = subtotal + tax
-
-  if (!open) return null
+  const total = subtotal // tax handled server-side via PATCH when you add tax controls (optional)
 
   function addRow() {
-    setItems((arr) => [...arr, { description: '', quantity: '1', unitPrice: '0' }])
+    setItems((arr) => [
+      ...arr,
+      { description: '', quantity: '1', unitPrice: '0', sortOrder: arr.length }
+    ])
   }
   function removeRow(idx: number) {
-    setItems((arr) => arr.filter((_, i) => i !== idx))
+    setItems((arr) => arr.filter((_, i) => i !== idx).map((r, i) => ({ ...r, sortOrder: i })))
   }
   function updateRow(idx: number, patch: Partial<ItemForm>) {
     setItems((arr) => arr.map((r, i) => (i === idx ? { ...r, ...patch } : r)))
   }
 
   async function save() {
-    if (!autoNumber && !number.trim()) {
-      toast.error('Number is required or enable Auto-number.')
+    if (!number.trim()) {
+      toast.error('Number is required')
       return
     }
     if (parsedItems.length === 0 || !parsedItems.some((i) => i.description.trim())) {
@@ -110,56 +105,76 @@ export default function NewInvoiceModal({
       return
     }
     try {
-      const payload: any = {
+      const payload = {
+        number: number.trim(),
         currency: currency.trim().toUpperCase(),
         issueDate,
         dueDate: dueDate || null,
-        status: 'DRAFT',
+        status,
         clientId: clientId || null,
         projectId: projectId || null,
         notes: notes.trim() ? notes : null,
         terms: terms.trim() ? terms : null,
-        items: parsedItems.map((it, i) => ({ ...it, sortOrder: i })),
-        taxRatePct
+        items: parsedItems.map((it, i) => ({
+          description: it.description,
+          quantity: it.quantity,
+          unitPrice: it.unitPrice,
+          sortOrder: i
+        }))
       }
-      if (!autoNumber) payload.number = number.trim()
-
-      const inv = await create.mutateAsync(payload)
-      toast.success('Invoice created')
-      onClose()
-      router.push(`/invoices/${inv.id}`)
+      await update.mutateAsync(payload)
+      toast.success('Invoice updated')
+      refetch()
+      router.push(`/invoices/${invoiceId}`)
     } catch (e: any) {
-      toast.error(e?.message || 'Failed to create invoice')
+      toast.error(e?.message || 'Failed to update invoice')
     }
   }
 
+  async function remove() {
+    if (!confirm('Delete this invoice?')) return
+    try {
+      await del.mutateAsync()
+      toast.success('Invoice deleted')
+      router.push('/invoices')
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to delete')
+    }
+  }
+
+  if (isLoading) return <div className="text-sm text-slate-500">Loading…</div>
+  if (error) return <div className="text-sm text-rose-700">{(error as Error).message}</div>
+  if (!data) return null
+
   return (
-    <div className="fixed inset-0 z-[120]">
-      <div className="absolute inset-0 bg-black/30" onClick={onClose} />
-      <div className="absolute left-1/2 top-8 -translate-x-1/2 w-[96%] xl:w-[960px] bg-white border rounded-xl shadow-xl p-4">
-        <div className="text-base font-medium">New invoice</div>
+    <div className="space-y-4">
+      <div className="bg-white border rounded-xl p-3 flex items-center justify-between">
+        <div className="space-y-1">
+          <div className="text-lg font-medium">Edit invoice</div>
+          <div className="text-sm text-slate-600">#{data.number}</div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            className="px-3 py-2 text-sm rounded-lg border bg-rose-50 text-rose-700 hover:bg-rose-100"
+            onClick={remove}
+          >
+            Delete
+          </button>
+          <button className="btn" onClick={() => router.push(`/invoices/${invoiceId}`)}>
+            Cancel
+          </button>
+          <button className="btn" onClick={save} disabled={update.isPending}>
+            {update.isPending ? 'Saving…' : 'Save changes'}
+          </button>
+        </div>
+      </div>
 
-        <div className="mt-3 grid" style={{ gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-          <div className="flex items-end gap-2">
-            <div className="flex-1">
-              <label className="label">Number</label>
-              <Input
-                value={number}
-                onChange={(e) => setNumber(e.target.value)}
-                placeholder={autoNumber ? nextNum.data?.preview || 'Auto' : 'INV-2025-0001'}
-                disabled={autoNumber}
-              />
-            </div>
-            <label className="inline-flex items-center gap-2 mb-2 text-sm">
-              <input
-                type="checkbox"
-                checked={autoNumber}
-                onChange={(e) => setAutoNumber(e.target.checked)}
-              />
-              Auto-number
-            </label>
+      <div className="bg-white border rounded-xl p-4">
+        <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <div>
+            <label className="label">Number</label>
+            <Input value={number} onChange={(e) => setNumber(e.target.value)} />
           </div>
-
           <div>
             <label className="label">Currency</label>
             <Input value={currency} onChange={(e) => setCurrency(e.target.value)} maxLength={3} />
@@ -170,8 +185,23 @@ export default function NewInvoiceModal({
           </div>
           <div>
             <label className="label">Due date</label>
-            <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+            <Input type="date" value={dueDate || ''} onChange={(e) => setDueDate(e.target.value)} />
           </div>
+          <div>
+            <label className="label">Status</label>
+            <select
+              className="border rounded-lg h-9 px-2 text-sm w-full"
+              value={status}
+              onChange={(e) => setStatus(e.target.value as any)}
+            >
+              <option>DRAFT</option>
+              <option>SENT</option>
+              <option>PAID</option>
+              <option>OVERDUE</option>
+              <option>CANCELED</option>
+            </select>
+          </div>
+          <div />
           <div>
             <label className="label">Client</label>
             <select
@@ -204,7 +234,6 @@ export default function NewInvoiceModal({
           </div>
         </div>
 
-        {/* Items */}
         <div className="mt-4">
           <div className="flex items-center justify-between">
             <div className="font-medium">Items</div>
@@ -289,19 +318,6 @@ export default function NewInvoiceModal({
                   {new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(subtotal)}
                 </span>
               </div>
-              <div className="flex items-center justify-between mt-2">
-                <span>Tax (%)</span>
-                <Input
-                  value={String(taxRatePct)}
-                  onChange={(e) => setTaxRatePct(Number(e.target.value || 0))}
-                />
-              </div>
-              <div className="flex items-center justify-between mt-2">
-                <span>Tax</span>
-                <span>
-                  {new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(tax)}
-                </span>
-              </div>
               <div className="flex items-center justify-between mt-2 font-medium">
                 <span>Total</span>
                 <span>
@@ -310,15 +326,6 @@ export default function NewInvoiceModal({
               </div>
             </div>
           </div>
-        </div>
-
-        <div className="flex justify-end gap-2 pt-3">
-          <button className="btn" onClick={onClose}>
-            Cancel
-          </button>
-          <button className="btn" onClick={save} disabled={create.isPending}>
-            {create.isPending ? 'Creating…' : 'Create invoice'}
-          </button>
         </div>
       </div>
     </div>

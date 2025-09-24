@@ -1,9 +1,10 @@
 'use client'
 
+import { getAuth } from '@/lib/auth'
 import { apiFetchBlob } from '@/lib/requestBlob'
 import { ChangelogItem, Client, InvoiceDto, InvoiceUpsert, Release, Task } from '@/lib/types'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { apiFetch } from './api'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { API_URL, apiFetch } from './api'
 
 // -------- Projects
 export type ProjectRow = {
@@ -92,6 +93,8 @@ export function useTasks(params: {
   projectId?: string
   status?: 'OPEN' | 'IN_PROGRESS' | 'DONE'
   q?: string
+  assigneeId?: string
+  label?: string
   page?: number
   pageSize?: number
   sort?: 'createdAt' | 'updatedAt' | 'dueDate' | 'priority' | 'kanbanOrder'
@@ -101,16 +104,20 @@ export function useTasks(params: {
   if (params.projectId) qs.set('projectId', params.projectId)
   if (params.status) qs.set('status', params.status)
   if (params.q) qs.set('q', params.q)
+  if (params.assigneeId) qs.set('assigneeId', params.assigneeId)
+  if (params.label) qs.set('label', params.label)
   if (params.page) qs.set('page', String(params.page))
   if (params.pageSize) qs.set('pageSize', String(params.pageSize))
   if (params.sort) qs.set('sort', params.sort)
   if (params.order) qs.set('order', params.order)
+
   return useQuery({
     queryKey: ['tasks', Object.fromEntries(qs)],
     queryFn: () =>
       apiFetch<{ rows: Task[]; total: number; page: number; pageSize: number }>(
         `/tasks?${qs.toString()}`
-      )
+      ),
+    placeholderData: keepPreviousData
   })
 }
 
@@ -146,17 +153,6 @@ export function useDeleteTask(id: string, projectId?: string) {
       qc.invalidateQueries({ queryKey: ['tasks'] })
       if (projectId) qc.invalidateQueries({ queryKey: ['tasks', { projectId }] })
     }
-  })
-}
-
-export function useTaskComments(taskId?: string) {
-  return useQuery({
-    queryKey: ['task-comments', taskId],
-    queryFn: () =>
-      apiFetch<{ rows: { id: string; authorId: string; body: string; createdAt: string }[] }>(
-        `/tasks/${taskId}/comments`
-      ),
-    enabled: !!taskId
   })
 }
 
@@ -262,6 +258,14 @@ export function useMe() {
     queryKey: ['me'],
     queryFn: () => apiFetch<MeResponse>('/auth/me')
   })
+}
+
+export type OrgMemberInfo = {
+  userId: string
+  orgId: string
+  role: string
+  name?: string | null
+  email?: string | null
 }
 
 export function useOrgMembers(orgId?: string) {
@@ -448,5 +452,161 @@ export function useSendInvoiceEmail(id: string) {
   return useMutation({
     mutationFn: (body: { to?: string; subject?: string; message?: string }) =>
       apiFetch(`/invoices/${id}/send`, { method: 'POST', json: body })
+  })
+}
+
+export function useNextInvoiceNumber() {
+  return useQuery({
+    queryKey: ['invoices', 'next-number'],
+    queryFn: () => apiFetch<{ preview: string }>('/invoices/next-number')
+  })
+}
+
+// ----- Task Comments -----
+export type TaskCommentDto = {
+  id: string
+  orgId: string
+  taskId: string
+  authorId: string
+  body: string
+  createdAt: string
+  updatedAt: string
+  editedAt: string | null
+}
+
+export function useTaskComments(taskId?: string) {
+  return useQuery({
+    queryKey: ['task-comments', taskId],
+    queryFn: () => apiFetch<{ rows: TaskCommentDto[] }>(`/tasks/${taskId}/comments`),
+    enabled: !!taskId
+  })
+}
+
+export function useAddTaskComment(taskId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body: string) =>
+      apiFetch<TaskCommentDto>(`/tasks/${taskId}/comments`, { method: 'POST', json: { body } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['task-comments', taskId] })
+  })
+}
+
+export function useEditTaskComment(taskId: string, id: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body: string) =>
+      apiFetch<TaskCommentDto>(`/tasks/${taskId}/comments/${id}`, {
+        method: 'PATCH',
+        json: { body }
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['task-comments', taskId] })
+  })
+}
+
+export function useDeleteTaskComment(taskId: string, id: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => apiFetch(`/tasks/${taskId}/comments/${id}`, { method: 'DELETE' }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['task-comments', taskId] })
+  })
+}
+
+// ----- Task Attachments -----
+export type TaskAttachmentDto = {
+  id: string
+  orgId: string
+  taskId: string
+  uploaderId: string
+  filename: string
+  mimeType: string
+  size: string
+  storageKey: string
+  createdAt: string
+}
+
+export function useTaskAttachments(taskId?: string) {
+  return useQuery({
+    queryKey: ['task-attachments', taskId],
+    queryFn: () => apiFetch<{ rows: TaskAttachmentDto[] }>(`/tasks/${taskId}/attachments`),
+    enabled: !!taskId
+  })
+}
+
+export function useUploadTaskAttachments(taskId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (files: FileList | File[]) => {
+      const f = Array.from(files)
+      const form = new FormData()
+      f.forEach((file) => form.append('files', file))
+      const { accessToken, orgId } = getAuth()
+      const res = await fetch(`${API_URL}/tasks/${taskId}/attachments`, {
+        method: 'POST',
+        headers: {
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+          ...(orgId ? { 'X-Org-Id': orgId } : {})
+        },
+        body: form
+      })
+      if (!res.ok) {
+        const t = await res.text()
+        throw new Error(t || 'Upload failed')
+      }
+      return res.json()
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['task-attachments', taskId] })
+  })
+}
+
+export async function downloadTaskAttachment(attachmentId: string, filename: string) {
+  const { accessToken, orgId } = getAuth()
+  const res = await fetch(`${API_URL}/tasks/attachments/${attachmentId}/download`, {
+    headers: {
+      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+      ...(orgId ? { 'X-Org-Id': orgId } : {})
+    }
+  })
+  if (!res.ok) throw new Error(`Download failed: ${res.status}`)
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+export function useDeleteTaskAttachment(attachmentId: string, taskId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => apiFetch(`/tasks/attachments/${attachmentId}`, { method: 'DELETE' }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['task-attachments', taskId] })
+  })
+}
+
+// ---- Task Events
+export type TaskEventDto = {
+  id: string
+  orgId: string
+  taskId: string
+  actorId: string | null
+  type:
+    | 'TASK_CREATED'
+    | 'TASK_UPDATED'
+    | 'STATUS_CHANGED'
+    | 'ASSIGNEE_CHANGED'
+    | 'COMMENT_ADDED'
+    | 'ATTACHMENT_ADDED'
+    | 'ATTACHMENT_REMOVED'
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  data: any | null
+  createdAt: string
+}
+
+export function useTaskEvents(taskId?: string) {
+  return useQuery({
+    queryKey: ['task-events', taskId],
+    queryFn: () => apiFetch<{ rows: TaskEventDto[] }>(`/tasks/${taskId}/events`),
+    enabled: !!taskId
   })
 }

@@ -1,6 +1,9 @@
 'use client'
 
+// import KanbanBoard from '@/components/kanban/KanbanBoard'
 import ProjectClientBadge from '@/components/projects/ProjectClientBadge'
+import ProjectInvoicesPanel from '@/components/projects/ProjectInvoicesPanel'
+import ProjectOverviewPanel from '@/components/projects/ProjectOverViewPanel'
 import ReleaseList from '@/components/releases/ReleaseList'
 import BoardToolbar, { type BoardFilters, type Swimlane } from '@/components/tasks/BoardToolbar'
 import KanbanBoard from '@/components/tasks/KanbanBoard'
@@ -76,6 +79,9 @@ export default function ProjectDetailPage() {
           </button>
         </div>
       </div>
+      <div className="bg-white border rounded-xl p-3">
+        <ProjectOverviewPanel projectId={data.id} />
+      </div>
 
       {/* Content area: FULL WIDTH */}
       {tab === 'board' ? (
@@ -89,6 +95,7 @@ export default function ProjectDetailPage() {
           />
           <div className="mt-3">
             <KanbanBoard projectId={data.id} filters={filters} swimlane={swimlane} />
+            {/* <KanbanBoard projectId={data.id} /> */}
           </div>
         </section>
       ) : (
@@ -105,6 +112,10 @@ export default function ProjectDetailPage() {
           <ReleaseList projectId={data.id} />
         </section>
       )}
+
+      <div className="bg-white border rounded-xl p-3">
+        <ProjectInvoicesPanel projectId={data.id} />
+      </div>
     </div>
   )
 }

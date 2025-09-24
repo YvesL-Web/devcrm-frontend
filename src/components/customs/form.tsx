@@ -1,4 +1,5 @@
 'use client'
+import React from 'react'
 import { FieldError } from 'react-hook-form'
 
 export function Label({ children }: { children: React.ReactNode }) {
@@ -13,9 +14,12 @@ export function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
   return <input {...props} className="border rounded-lg px-3 py-2 text-sm w-full" />
 }
 
-export function Textarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  return <textarea {...props} className="border rounded-lg px-3 py-2 text-sm w-full" />
-}
+export const Textarea = React.forwardRef<
+  HTMLTextAreaElement,
+  React.TextareaHTMLAttributes<HTMLTextAreaElement>
+>(function Textarea(props, ref) {
+  return <textarea {...props} ref={ref} className="border rounded-lg px-3 py-2 text-sm w-full" />
+})
 
 export function FormError({ error }: { error?: FieldError }) {
   if (!error) return null

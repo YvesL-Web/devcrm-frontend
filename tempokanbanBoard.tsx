@@ -139,6 +139,10 @@ export default function KanbanBoard({
       if (filters?.assigneeId && filters.assigneeId !== 'ALL') {
         if ((t.assigneeId || '') !== filters.assigneeId) return false
       }
+      if (filters?.label && filters.label !== 'ALL') {
+        const labels = t.labels || []
+        if (!labels.includes(filters.label)) return false
+      }
       return true
     })
   }, [all, filters])
@@ -313,7 +317,6 @@ export default function KanbanBoard({
                   ))}
                 </div>
               </ColumnDroppable>
-              {/* <QuickAddTask projectId={projectId} status={col.key} /> */}
             </div>
           )
         })}
